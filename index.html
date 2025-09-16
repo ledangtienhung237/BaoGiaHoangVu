@@ -1,467 +1,232 @@
 <!doctype html>
 <html lang="vi">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Smart Product Scanner — Nhận dạng & đối chiếu JSON</title>
-<script src="https://cdn.tailwindcss.com"></script>
-<script>
-tailwind.config = { theme: { extend: { boxShadow: { 'soft': '0 8px 30px rgba(0,0,0,.08)' }}}}
-</script>
-<!-- Fuse.js for fuzzy search -->
-<script src="https://cdn.jsdelivr.net/npm/fuse.js@6.6.2"></script>
-<!-- Tesseract.js for in-browser OCR (no server needed) -->
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-<style>
-input[type="file"] { display: none; }
-.scroll-thin{ scrollbar-width: thin; }
-</style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ảnh → Sản phẩm → Giá (Demo)</title>
+  <style>
+    :root{--bg:#0b0c0f;--card:#151821;--fg:#e9edf1;--muted:#9aa4b2;--accent:#6ee7b7}
+    *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,Segoe UI,Roboto}
+    .wrap{max-width:1100px;margin:32px auto;padding:0 16px}
+    .grid{display:grid;gap:16px;grid-template-columns:1.1fr 1fr}
+    .card{background:var(--card);border-radius:16px;padding:16px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+    .title{font-weight:700;font-size:24px;margin:0 0 8px}
+    .muted{color:var(--muted)}
+    .drop{border:2px dashed #2a3342;border-radius:14px;padding:14px;text-align:center}
+    .drop input{display:none}
+    .pill{display:inline-flex;align-items:center;gap:8px;background:#1e2430;color:#d6deeb;padding:8px 12px;border-radius:12px}
+    .btn{appearance:none;border:0;border-radius:12px;padding:10px 14px;background:#1f2937;color:#fff;cursor:pointer}
+    .btn[disabled]{opacity:.6;cursor:not-allowed}
+    .btn-primary{background:linear-gradient(90deg,#22d3ee,#34d399)}
+    img{max-width:100%;border-radius:12px}
+    .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    .kvs{display:grid;gap:10px}
+    .kvs label{font-size:13px;color:var(--muted)}
+    .kvs input,.kvs textarea{width:100%;background:#0f131b;border:1px solid #232b3a;color:#e8eef7;border-radius:10px;padding:10px}
+    .result{display:grid;gap:10px}
+    .result .item{background:#0f131b;border:1px solid #273041;border-radius:12px;padding:12px;display:grid;gap:4px}
+    .badge{background:#0b3b2d;color:#8ff0c6;border:1px solid #145f49;border-radius:999px;padding:2px 8px;font-size:12px}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+    .hint{font-size:12px;color:var(--muted)}
+  </style>
+  <!-- Tesseract.js (OCR) & Fuse.js (fuzzy search) -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.1.1/dist/tesseract.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/fuse.js@6.6.2/dist/fuse.min.js"></script>
 </head>
-<body class="bg-slate-50 text-slate-800 selection:bg-indigo-100">
-  <!-- Header -->
-  <header class="sticky top-0 z-30 bg-white/80 backdrop-blur border-b border-slate-200">
-    <div class="max-w-6xl mx-auto px-4 py-3 flex items-center gap-4">
-      <img src="./logo.png" alt="Logo" class="w-10 h-10 rounded-lg object-contain ring-1 ring-slate-200" onerror="this.style.display='none'"/>
-      <div class="flex-1">
-        <h1 class="text-xl font-semibold tracking-tight">Smart Product Scanner</h1>
-        <p class="text-sm text-slate-500 -mt-0.5">Chụp/Upload hình → Nhận dạng ký tự (OCR) → Đối chiếu <code>products.json</code> → Trả tên & giá. Không khớp thì báo lại.</p>
-      </div>
-      <a href="#help" class="text-sm text-indigo-600 hover:text-indigo-700">Hướng dẫn</a>
+<body>
+  <div class="wrap">
+    <h1 class="title">Tự nhận diện sản phẩm từ ảnh &rarr; đối chiếu JSON &rarr; trả giá</h1>
+    <p class="muted">Luồng chuẩn: Khách <b>upload ảnh</b> → OCR/rút trích từ khóa (và có thể ảnh ngược) → <b>so khớp</b> với danh mục JSON → <b>hiển thị giá</b>. Demo này chạy <i>offline</i> trên trình duyệt bằng OCR và khớp mờ; sau này có thể gắn thêm API tìm kiếm ảnh (Bing Visual Search / Google Vision) để tăng độ chính xác.</p>
+
+    <div class="grid">
+      <!-- LEFT: Image + OCR output -->
+      <section class="card">
+        <h2 class="title" style="font-size:20px">1) Ảnh sản phẩm</h2>
+        <div class="drop" id="drop">
+          <input id="imgInput" type="file" accept="image/*" />
+          <p class="muted">Kéo thả hoặc <label for="imgInput" class="pill" style="cursor:pointer">Chọn ảnh</label></p>
+          <p class="hint">Gợi ý: ảnh nhãn hộp/ống, mặt có chữ càng rõ càng tốt.</p>
+        </div>
+        <div id="preview" style="margin-top:12px"></div>
+        <div class="kvs" style="margin-top:12px">
+          <label>Văn bản OCR (có thể chỉnh tay nếu nhận chưa đúng):</label>
+          <textarea id="ocrOut" rows="6" placeholder="OCR text will appear here..."></textarea>
+          <div class="row">
+            <button class="btn" id="btnOcr">Nhận dạng OCR</button>
+            <button class="btn" id="btnExtract">Rút trích từ khóa</button>
+            <span class="hint">Từ khóa trích xuất sẽ dùng để khớp với JSON.</span>
+          </div>
+          <div class="row"><span class="pill">Từ khóa:</span> <span id="kw" class="mono"></span></div>
+        </div>
+      </section>
+
+      <!-- RIGHT: Catalog & Results -->
+      <section class="card">
+        <h2 class="title" style="font-size:20px">2) Danh mục JSON & kết quả</h2>
+        <div class="kvs">
+          <label>Tải danh mục sản phẩm (JSON)</label>
+          <input type="file" id="jsonInput" accept="application/json" />
+          <textarea id="jsonText" rows="6" placeholder='Hoặc dán JSON vào đây...\n[ { "name": "RelyX U200 Automix A2 (xi măng U200)", "price": 123456 }, { "name": "RelyX U200 Automix A3", "price": 123456 } ]'></textarea>
+          <div class="row">
+            <button class="btn" id="btnLoadJson">Nạp danh mục</button>
+            <button class="btn btn-primary" id="btnMatch" disabled>So khớp & lấy giá</button>
+          </div>
+        </div>
+        <h3 style="margin:12px 0 6px">Kết quả</h3>
+        <div id="results" class="result"></div>
+        <p class="hint">* Mẹo: Nếu một mã có nhiều biến thể màu nhưng <b>cùng giá</b>, bạn có thể lưu 2 dòng cùng <span class="mono">price</span> trong JSON hoặc thêm thuộc tính <span class="mono">variants</span> tùy ý.</p>
+      </section>
     </div>
-  </header>
 
-  <!-- Main -->
-  <main class="max-w-6xl mx-auto px-4 py-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
-    <!-- Left: Capture/Upload -->
-    <section class="bg-white rounded-2xl shadow-soft p-5">
-      <div class="flex items-center justify-between mb-4">
-        <h2 class="text-lg font-semibold">1) Ảnh sản phẩm</h2>
-        <div class="flex items-center gap-3 text-sm">
-          <label class="inline-flex items-center gap-2 cursor-pointer select-none">
-            <input id="autoMatch" type="checkbox" class="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500" checked>
-            <span>Tự động khớp sau OCR</span>
-          </label>
-        </div>
-      </div>
-
-      <!-- Camera controls -->
-      <div class="grid grid-cols-2 gap-3 mb-3">
-        <button id="btnStartCam" class="px-3 py-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 active:scale-[.99]">Bật camera</button>
-        <button id="btnStopCam" class="px-3 py-2 rounded-xl bg-slate-100 text-slate-700 hover:bg-slate-200" disabled>Tắt camera</button>
-        <button id="btnCapture" class="px-3 py-2 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700" disabled>Chụp ảnh (C)</button>
-        <label for="fileInput" class="block text-center px-3 py-2 rounded-xl bg-white ring-1 ring-slate-200 hover:bg-slate-50 cursor-pointer">Upload hình (U)</label>
-        <input id="fileInput" type="file" accept="image/*" />
-      </div>
-
-      <!-- Video / Canvas -->
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div>
-          <div class="aspect-video bg-slate-100 rounded-xl ring-1 ring-slate-200 overflow-hidden flex items-center justify-center">
-            <video id="video" class="w-full h-full object-contain" autoplay playsinline></video>
-            <span id="noCamMsg" class="hidden text-slate-500 text-sm p-4">Camera chưa bật.</span>
-          </div>
-          <p class="text-xs text-slate-500 mt-2">Tip: Cho khung ảnh rõ mã/nhãn (ánh sáng tốt, không lóa).</p>
-        </div>
-        <div>
-          <div class="aspect-video bg-slate-100 rounded-xl ring-1 ring-slate-200 overflow-hidden flex items-center justify-center">
-            <canvas id="canvas" class="w-full h-full"></canvas>
-          </div>
-          <div class="mt-2 flex items-center justify-between text-xs text-slate-500">
-            <span>Ảnh đã chụp / đã chọn</span>
-            <button id="btnClear" class="px-2 py-1 rounded-lg ring-1 ring-slate-200 hover:bg-slate-50">Xóa ảnh</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Drag & Drop -->
-      <div id="dropZone" class="mt-4 rounded-xl border-2 border-dashed border-slate-300 p-4 text-center text-slate-600 hover:bg-slate-50">
-        Kéo & thả ảnh vào đây để xử lý nhanh.
-      </div>
-
-      <!-- OCR progress -->
-      <div id="ocrBox" class="mt-4 hidden">
-        <div class="flex items-center justify-between mb-1">
-          <span class="text-sm font-medium">Đang nhận dạng (OCR)…</span>
-          <span id="ocrPct" class="text-xs text-slate-500">0%</span>
-        </div>
-        <div class="w-full bg-slate-200 rounded-full h-2">
-          <div id="ocrBar" class="bg-indigo-600 h-2 rounded-full" style="width:0%"></div>
-        </div>
-      </div>
-
-      <!-- OCR text -->
-      <div class="mt-4">
-        <label class="block text-sm font-medium mb-2">Kết quả OCR (có thể sửa thủ công trước khi đối chiếu)</label>
-        <textarea id="ocrText" class="w-full h-28 rounded-xl ring-1 ring-slate-200 p-3 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Mã hàng / Model / Từ khóa trên nhãn…"></textarea>
-        <div class="mt-2 flex items-center gap-2">
-          <button id="btnRunOCR" class="px-3 py-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700" disabled>Chạy OCR lại</button>
-          <button id="btnMatch" class="px-3 py-2 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700">Đối chiếu JSON (M)</button>
-        </div>
-      </div>
+    <section class="card" style="margin-top:16px">
+      <h2 class="title" style="font-size:20px">3) Ghi chú triển khai thực tế</h2>
+      <ul>
+        <li><b>OCR + Heuristics</b>: Tesseract.js trích văn bản (RelyX, U200, 3M, shade A2/A3...).
+          Sau đó chuẩn hóa (bỏ dấu, hạ chữ thường, bỏ ký tự thừa) và trích <i>từ khóa ưu tiên</i> (u200, relyx, cement, 3m...).</li>
+        <li><b>Fuzzy match</b>: Dùng Fuse.js so khớp mờ với danh mục <span class="mono">name</span> (và alias) trong JSON.</li>
+        <li><b>Ảnh ngược (tùy chọn)</b>: Có thể gọi Bing Visual Search / Cloud Vision Product Search để lấy nhãn/ID sản phẩm rồi khớp lại JSON.</li>
+        <li><b>Barcode (nếu có)</b>: Nếu ảnh thấy mã vạch, gắn thư viện ZXing/QuaggaJS để đọc trực tiếp → tra danh mục theo <span class="mono">sku/barcode</span>.</li>
+      </ul>
     </section>
-
-    <!-- Right: Matching Result -->
-    <section class="bg-white rounded-2xl shadow-soft p-5">
-      <h2 class="text-lg font-semibold mb-4">2) Kết quả đối chiếu sản phẩm</h2>
-
-      <div id="productState" class="text-sm text-slate-600 mb-3">Đang tải <code>products.json</code>…</div>
-
-      <div id="matchCard" class="hidden">
-        <div class="rounded-2xl ring-1 ring-slate-200 p-4">
-          <div class="flex items-start justify-between">
-            <div>
-              <p class="text-xs uppercase tracking-wide text-slate-500">Sản phẩm khớp nhất</p>
-              <h3 id="matchName" class="text-lg font-semibold mt-1"></h3>
-            </div>
-            <span id="matchScore" class="text-xs px-2 py-1 rounded-full bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200">score</span>
-          </div>
-          <p id="matchPrice" class="text-indigo-700 font-semibold text-xl mt-2"></p>
-          <p id="matchNote" class="text-sm text-slate-600 mt-2"></p>
-        </div>
-      </div>
-
-      <div id="noMatchCard" class="hidden">
-        <div class="rounded-2xl ring-1 ring-rose-200 bg-rose-50 p-4">
-          <h3 class="text-base font-semibold text-rose-700">Không tìm thấy khớp tin cậy</h3>
-          <p class="text-sm text-rose-700 mt-1">Vui lòng liên hệ hỗ trợ để xác nhận mã hàng/giá. Bạn có thể chỉnh lại <em>Kết quả OCR</em> và bấm đối chiếu lần nữa.</p>
-        </div>
-      </div>
-
-      <!-- Recent matches log -->
-      <div class="mt-5">
-        <div class="flex items-center justify-between mb-2">
-          <h3 class="font-medium">Lịch sử đối chiếu gần đây</h3>
-          <button id="btnClearLog" class="text-sm px-2 py-1 rounded-lg ring-1 ring-slate-200 hover:bg-slate-50">Xóa lịch sử</button>
-        </div>
-        <ul id="matchLog" class="space-y-2 max-h-64 overflow-auto scroll-thin pr-1"></ul>
-      </div>
-
-      <!-- Raw products viewer -->
-      <details class="mt-6">
-        <summary class="cursor-pointer text-sm text-slate-600 hover:text-slate-800">Xem danh sách sản phẩm từ <code>products.json</code></summary>
-        <div id="productList" class="mt-3 grid gap-2 max-h-64 overflow-auto pr-1 scroll-thin"></div>
-      </details>
-    </section>
-  </main>
-
-  <!-- Help -->
-  <section id="help" class="max-w-6xl mx-auto px-4 pb-10">
-    <div class="bg-white rounded-2xl shadow-soft p-6">
-      <h2 class="text-lg font-semibold mb-3">Hướng dẫn nhanh</h2>
-      <ol class="list-decimal list-inside text-sm space-y-2 text-slate-700">
-        <li>Đặt <code>products.json</code> và <code>logo.png</code> cùng thư mục với file HTML này.</li>
-        <li><strong>products.json</strong> dạng: <code>[{"name":"mã + tên","price":7500000}, ...]</code></li>
-        <li>Bật camera hoặc upload ảnh → (tùy chọn) kéo thả ảnh → Hệ thống OCR trích xuất chữ.</li>
-        <li>Bấm <em>Đối chiếu JSON</em> để tìm sản phẩm và hiện <strong>giá VND</strong>. Nếu không khớp sẽ hiện cảnh báo.</li>
-        <li>Không cần server: OCR chạy ngay trong trình duyệt bằng Tesseract.js. Có thể thay bằng API ngoài ở phần <code>detectText()</code>.</li>
-      </ol>
-    </div>
-  </section>
-
-  <footer class="py-8 text-center text-xs text-slate-500">© 2025 — Smart Product Scanner</footer>
+  </div>
 
 <script>
-// ===== Utilities =====
-const $ = (sel) => document.querySelector(sel);
-const fmtVND = (n) => n?.toLocaleString('vi-VN', { style: 'currency', currency: 'VND' });
-const stripAccents = (s) => s?.normalize('NFD').replace(/\p{Diacritic}/gu, '') ?? '';
-const simplify = (s) => stripAccents(String(s||'').toLowerCase()).replace(/[^\p{L}\p{N}\s\-_.]/gu,' ').replace(/\s+/g,' ').trim();
-// ===== Elements =====
-const video = $('#video');
-const canvas = $('#canvas');
-const ctx = canvas.getContext('2d');
-const noCamMsg = $('#noCamMsg');
-const fileInput = $('#fileInput');
-const btnStartCam = $('#btnStartCam');
-const btnStopCam = $('#btnStopCam');
-const btnCapture = $('#btnCapture');
-const btnRunOCR = $('#btnRunOCR');
+const $ = (s)=>document.querySelector(s);
+const preview = $('#preview');
+const ocrOut = $('#ocrOut');
+const kwEl = $('#kw');
+const btnOcr = $('#btnOcr');
+const btnExtract = $('#btnExtract');
+const btnLoadJson = $('#btnLoadJson');
 const btnMatch = $('#btnMatch');
-const btnClear = $('#btnClear');
-const btnClearLog = $('#btnClearLog');
-const dropZone = $('#dropZone');
-const ocrBox = $('#ocrBox');
-const ocrPct = $('#ocrPct');
-const ocrBar = $('#ocrBar');
-const ocrText = $('#ocrText');
-const autoMatch = $('#autoMatch');
-const productState = $('#productState');
-const productList = $('#productList');
-const matchCard = $('#matchCard');
-const noMatchCard = $('#noMatchCard');
-const matchName = $('#matchName');
-const matchPrice = $('#matchPrice');
-const matchNote = $('#matchNote');
-const matchScore = $('#matchScore');
-const matchLog = $('#matchLog');
-
-let stream = null;
-let products = [];
+const results = $('#results');
+let currentImageBlob = null;
+let catalog = [];
 let fuse = null;
-let lastImageBlob = null;
 
-// ===== Load products.json =====
-async function loadProducts(){
-  try{
-    const res = await fetch('./products.json', { cache: 'no-store' });
-    if(!res.ok) throw new Error(res.status+' '+res.statusText);
-    const data = await res.json();
-    if(!Array.isArray(data)) throw new Error('products.json phải là mảng');
-    products = data.map((p,i)=>({
-      id: i+1,
-      name: String(p.name||'').trim(),
-      price: Number(p.price||0)
-    }));
+// Helpers
+const VN_NORM = (s)=> s
+  .toLowerCase()
+  .normalize('NFD').replace(/[\u0300-\u036f]/g,'') // strip accents
+  .replace(/[^a-z0-9\s\-\.\+]/g,' ')
+  .replace(/\s+/g,' ').trim();
 
-    // Build Fuse index
-    fuse = new Fuse(products, {
-      includeScore: true,
-      shouldSort: true,
-      threshold: 0.35,
-      minMatchCharLength: 2,
-      keys: [
-        { name: 'name', getFn: (obj) => simplify(obj.name) }
-      ]
-    });
-
-    productState.innerHTML = `Đã tải <strong>${products.length}</strong> sản phẩm.`;
-    renderProductList();
-  }catch(err){
-    productState.innerHTML = `<span class="text-rose-600">Lỗi tải products.json:</span> ${err.message}`;
-  }
+function extractKeywords(text){
+  const t = VN_NORM(text);
+  const tokens = new Set();
+  // Keywords of interest in nha khoa (tuỳ chỉnh thêm):
+  const dict = [
+    'u200','relyx','relyx u200','relyx u-200','3m','cement','xi mang','automix','refill','clicker','a1','a2','a3','universal','luting'
+  ];
+  for(const d of dict){ if(t.includes(VN_NORM(d))) tokens.add(d); }
+  // Any token that looks like model codes:
+  (t.match(/\b[a-z]{1,3}\d{2,4}\b/g)||[]).forEach(x=>tokens.add(x));
+  // Shades A1/A2/A3:
+  (t.match(/\ba[1234]\b/g)||[]).forEach(x=>tokens.add(x));
+  return Array.from(tokens);
 }
 
-function renderProductList(){
-  if(!products.length){ productList.innerHTML = '<p class="text-sm">(trống)</p>'; return; }
-  productList.innerHTML = products.map(p=>`
-    <div class="flex items-center justify-between gap-3 p-2 rounded-xl ring-1 ring-slate-200">
-      <div class="text-sm">${p.name}</div>
-      <div class="text-sm font-semibold text-indigo-700">${fmtVND(p.price)}</div>
-    </div>
-  `).join('');
+function renderImage(file){
+  const url = URL.createObjectURL(file);
+  currentImageBlob = file;
+  preview.innerHTML = `<img src="${url}" alt="preview"/>`;
 }
 
-// ===== Camera =====
-async function startCamera(){
-  try{
-    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
-    video.srcObject = stream;
-    video.classList.remove('hidden');
-    noCamMsg.classList.add('hidden');
-    btnStartCam.disabled = true; btnStopCam.disabled = false; btnCapture.disabled = false; btnRunOCR.disabled = true;
-  }catch(err){
-    noCamMsg.textContent = 'Không truy cập được camera: ' + err.message;
-    noCamMsg.classList.remove('hidden');
-  }
-}
-
-function stopCamera(){
-  if(stream){ stream.getTracks().forEach(t=>t.stop()); }
-  stream = null;
-  video.srcObject = null;
-  btnStartCam.disabled = false; btnStopCam.disabled = true; btnCapture.disabled = true; btnRunOCR.disabled = !!lastImageBlob;
-}
-
-// ===== Camera capture chỉnh lại chất lượng =====
-function captureFrame(){
-const vw = video.videoWidth || 1280;
-const vh = video.videoHeight || 720;
-const maxW = 1920; const scale = Math.min(1, maxW/vw);
-const cw = Math.round(vw*scale), ch = Math.round(vh*scale);
-canvas.width = cw; canvas.height = ch;
-ctx.drawImage(video, 0, 0, cw, ch);
-canvas.toBlob((blob)=>{ lastImageBlob = blob; btnRunOCR.disabled = !blob; if(autoMatch.checked) runOCRAndMaybeMatch(); }, 'image/jpeg', 0.95);
-}
-
-
-function drawSelectedImage(img){
-const maxW = 2048; const scale = Math.min(1, maxW/img.naturalWidth);
-const cw = Math.round(img.naturalWidth*scale), ch = Math.round(img.naturalHeight*scale);
-canvas.width = cw; canvas.height = ch;
-ctx.drawImage(img, 0, 0, cw, ch);
-canvas.toBlob((blob)=>{ lastImageBlob = blob; btnRunOCR.disabled = !blob; if(autoMatch.checked) runOCRAndMaybeMatch(); }, 'image/jpeg', 0.96);
-}
-
-  // ===== OCR có tiền xử lý ảnh =====
-function preprocessCanvas(){
-const w = canvas.width, h = canvas.height;
-const off = document.createElement('canvas');
-off.width = w; off.height = h;
-const octx = off.getContext('2d');
-octx.drawImage(canvas, 0, 0, w, h);
-const img = octx.getImageData(0,0,w,h);
-const d = img.data;
-const contrast = 60;
-const f = (259*(contrast+255))/(255*(259-contrast));
-for(let i=0;i<d.length;i+=4){
-let g = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
-g = f*(g-128)+128; if(g<0) g=0; if(g>255) g=255;
-const thr = 160; const v = g>thr?255:0;
-d[i]=d[i+1]=d[i+2]=v; d[i+3]=255;
-}
-octx.putImageData(img,0,0);
-return new Promise(resolve=> off.toBlob(resolve,'image/png',1));
-}
-
-
-async function detectText(blob){
-if(!blob){ throw new Error('Chưa có ảnh để OCR'); }
-ocrBox.classList.remove('hidden');
-ocrPct.textContent = '0%'; ocrBar.style.width = '0%';
-
-
-const preBlob = await preprocessCanvas();
-const { data } = await Tesseract.recognize(preBlob, 'eng+vie', {
-tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_/.:',
-preserve_interword_spaces: '1',
-user_defined_dpi: '300',
-psm: 6,
-logger: (m)=>{
-if(m.status === 'recognizing text' && m.progress!=null){
-const pct = Math.round(m.progress*100);
-ocrPct.textContent = pct+'%';
-ocrBar.style.width = pct+'%';
-}
-}
+// File inputs
+$('#imgInput').addEventListener('change', e=>{
+  const f = e.target.files?.[0];
+  if(f){ renderImage(f); }
 });
-ocrBox.classList.add('hidden');
-return (data?.text||'').trim();
-}
-function clearCanvas(){
-  ctx.clearRect(0,0,canvas.width, canvas.height);
-  lastImageBlob = null; ocrText.value = '';
-  btnRunOCR.disabled = true;
-}
-
-// ===== File handlers =====
-fileInput.addEventListener('change', (e)=>{
-  const file = e.target.files?.[0]; if(!file) return;
-  const img = new Image();
-  img.onload = ()=> drawSelectedImage(img);
-  img.src = URL.createObjectURL(file);
+$('#jsonInput').addEventListener('change', async e=>{
+  const f = e.target.files?.[0];
+  if(!f) return;
+  const text = await f.text();
+  $('#jsonText').value = text;
 });
 
-['dragenter','dragover'].forEach(ev=>dropZone.addEventListener(ev,(e)=>{e.preventDefault(); dropZone.classList.add('bg-slate-50');}));
-['dragleave','drop'].forEach(ev=>dropZone.addEventListener(ev,(e)=>{e.preventDefault(); if(ev==='drop'){ const f = e.dataTransfer.files?.[0]; if(f && f.type.startsWith('image/')){ const img=new Image(); img.onload=()=>drawSelectedImage(img); img.src=URL.createObjectURL(f);} } dropZone.classList.remove('bg-slate-50'); }));
+// OCR
+btnOcr.addEventListener('click', async()=>{
+  if(!currentImageBlob){ alert('Chọn ảnh trước.'); return; }
+  btnOcr.disabled = true; btnOcr.textContent = 'Đang OCR...';
+  try{
+    const { data } = await Tesseract.recognize(currentImageBlob, 'eng');
+    ocrOut.value = data.text || '';
+  }catch(err){
+    console.error(err); alert('OCR lỗi, thử lại ảnh khác.');
+  }finally{ btnOcr.disabled=false; btnOcr.textContent='Nhận dạng OCR'; }
+});
 
-// ===== OCR =====
-async function detectText(blob){
-  if(!blob){ throw new Error('Chưa có ảnh để OCR'); }
-  ocrBox.classList.remove('hidden');
-  ocrPct.textContent = '0%'; ocrBar.style.width = '0%';
+// Extract keywords
+btnExtract.addEventListener('click', ()=>{
+  const kws = extractKeywords(ocrOut.value);
+  kwEl.textContent = kws.join(', ');
+});
 
-  const { data } = await Tesseract.recognize(blob, 'eng+vie', {
-    logger: (m)=>{
-      if(m.status === 'recognizing text' && m.progress!=null){
-        const pct = Math.round(m.progress*100);
-        ocrPct.textContent = pct+'%';
-        ocrBar.style.width = pct+'%';
-      }
-    }
+// Load catalog JSON
+btnLoadJson.addEventListener('click', ()=>{
+  try{
+    const raw = $('#jsonText').value.trim();
+    catalog = raw ? JSON.parse(raw) : [];
+  }catch(err){ alert('JSON không hợp lệ'); return; }
+  if(!Array.isArray(catalog)){ alert('JSON phải là mảng đối tượng'); return; }
+
+  // Build alias & normalized fields
+  for(const it of catalog){
+    it._name_norm = VN_NORM(it.name||'');
+    // optional alias array
+    const al = Array.isArray(it.alias)?it.alias:[];
+    it._alias_norm = al.map(VN_NORM);
+  }
+  fuse = new Fuse(catalog,{
+    includeScore:true,
+    threshold:0.35,
+    keys:[{name:'name',getFn:(it)=>it.name},{name:'alias',getFn:(it)=>it.alias||[]},{name:'_name_norm'},{name:'_alias_norm'}]
   });
-  ocrBox.classList.add('hidden');
-  return (data?.text||'').trim();
-}
-
-async function runOCRAndMaybeMatch(){
-  try{
-    const text = await detectText(lastImageBlob);
-    ocrText.value = text;
-    if(autoMatch.checked){ doMatch(); }
-  }catch(err){ alert('OCR lỗi: '+ err.message); }
-}
-
-// ===== Matching cải tiến regex phát hiện mã =====
-function doMatch(){
-const qraw = ocrText.value || '';
-const q = simplify(qraw);
-if(!q){ alert('Chưa có chuỗi để đối chiếu'); return; }
-if(!fuse){ alert('Chưa tải xong products.json'); return; }
-
-
-const tokens = q.split(/\s+/).filter(Boolean);
-const codeRegexes = [/[A-Z]{1,4}[-\/]?\d{2,6}[A-Z\d-]*/i, /\b\d{3,6}[A-Z]\d?\b/];
-const strongHints = tokens.filter(t=> codeRegexes.some(rx=> rx.test(t)));
-let results = fuse.search(q);
-
-
-const boosted = products.map(p=>{
-const pn = simplify(p.name);
-const hit = strongHints.length ? strongHints.every(h=> pn.includes(h.toLowerCase())) : false;
-return { p, boost: hit ? 0.12 : 0 };
+  btnMatch.disabled = false;
+  alert('Đã nạp danh mục: '+catalog.length+' sản phẩm');
 });
 
-
-const merged = results.map(r=>{
-const b = boosted.find(x=>x.p===r.item)?.boost || 0;
-return { item: r.item, score: Math.max(0, (r.score ?? 0) - b) };
-}).sort((a,b)=>a.score-b.score);
-
-
-const top = merged[0];
-if(!top){ showNoMatch('Không có kết quả.'); return; }
-const score = Number(top.score ?? 1);
-if(score > 0.5){ showNoMatch('Độ tin cậy thấp (score '+score.toFixed(2)+').'); addLog(qraw, null, score); return; }
-showMatch(top.item, score, qraw);
-}
-
-function showMatch(item, score, qraw){
-  matchCard.classList.remove('hidden');
-  noMatchCard.classList.add('hidden');
-
-  matchName.textContent = item.name;
-  matchPrice.textContent = fmtVND(item.price);
-  matchScore.textContent = 'score ' + score.toFixed(2);
-
-  let note = '';
-  if(score <= 0.34){ note = 'Khớp chắc chắn.'; }
-  else { note = 'Khớp tạm ổn — vui lòng kiểm tra lại mã trên hộp/nhãn.'; }
-  if(qraw){ note += ' | Truy vấn: "' + qraw.slice(0,120) + (qraw.length>120?'…':'') + '"'; }
-  matchNote.textContent = note;
-
-  addLog(qraw, item, score);
-}
-
-function showNoMatch(reason){
-  matchCard.classList.add('hidden');
-  noMatchCard.classList.remove('hidden');
-  addLog(ocrText.value, null, null, reason);
-}
-
-function addLog(query, item, score, reason){
-  const li = document.createElement('li');
-  li.className = 'p-3 rounded-xl ring-1 ring-slate-200 bg-white';
-  li.innerHTML = `
-    <div class="flex items-center justify-between gap-3">
-      <div class="text-sm text-slate-600 line-clamp-2"><span class="font-medium">Query:</span> ${query ? query.replace(/[<>]/g,'') : '(trống)'} </div>
-      <div class="text-xs text-slate-500">${new Date().toLocaleString('vi-VN')}</div>
-    </div>
-    ${ item ? `<div class="mt-1 text-sm"><span class="font-medium">→ ${item.name}</span> — <span class="font-semibold text-indigo-700">${fmtVND(item.price)}</span> <span class="ml-2 text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200">${(score!=null?('score '+score.toFixed(2)):'')}</span></div>` : `<div class="mt-1 text-sm text-rose-700"><span class="font-medium">→ Không khớp</span>${reason?': '+reason:''}</div>`}
-  `;
-  matchLog.prepend(li);
-}
-
-// ===== Events =====
-btnStartCam.addEventListener('click', startCamera);
-btnStopCam.addEventListener('click', stopCamera);
-btnCapture.addEventListener('click', captureFrame);
-btnRunOCR.addEventListener('click', runOCRAndMaybeMatch);
-btnMatch.addEventListener('click', doMatch);
-btnClear.addEventListener('click', clearCanvas);
-btnClearLog.addEventListener('click', ()=> matchLog.innerHTML = '');
-
-// Keyboard shortcuts: C capture, U upload, M match
-window.addEventListener('keydown', (e)=>{
-  if(['INPUT','TEXTAREA'].includes(e.target.tagName)) return;
-  const k = e.key.toLowerCase();
-  if(k==='c' && !btnCapture.disabled) { e.preventDefault(); captureFrame(); }
-  if(k==='u') { e.preventDefault(); fileInput.click(); }
-  if(k==='m') { e.preventDefault(); doMatch(); }
+// Match
+btnMatch.addEventListener('click', ()=>{
+  if(!fuse){ alert('Hãy nạp JSON trước.'); return; }
+  const kws = extractKeywords(ocrOut.value);
+  const q = kws.join(' '); // simple query
+  const query = q || VN_NORM(ocrOut.value).split(' ').slice(0,10).join(' ');
+  const res = fuse.search(query).slice(0,6);
+  results.innerHTML = '';
+  if(res.length===0){
+    results.innerHTML = '<div class="item">Không tìm thấy. Hãy chỉnh tay từ khóa hoặc danh mục alias.</div>';
+    return;
+  }
+  for(const r of res){
+    const it = r.item;
+    const price = typeof it.price==='number' ? it.price : (it.price?.value ?? it.price);
+    const variants = Array.isArray(it.variants)? it.variants.join(', ') : '';
+    const alias = Array.isArray(it.alias)? it.alias.join(', ') : '';
+    const extra = [];
+    if(variants) extra.push(`Biến thể: <span class="mono">${variants}</span>`);
+    if(alias) extra.push(`Alias: <span class="mono">${alias}</span>`);
+    const html = `
+      <div class="item">
+        <div class="row" style="justify-content:space-between">
+          <div><strong>${it.name||'Sản phẩm'}</strong></div>
+          <span class="badge">điểm ${ (1-r.score).toFixed(2) }</span>
+        </div>
+        <div>Giá: <strong class="mono">${price!=null? price.toLocaleString('vi-VN')+' ₫' : '—'}</strong></div>
+        ${extra.length? `<div class="muted">${extra.join(' · ')}</div>`:''}
+      </div>`;
+    results.insertAdjacentHTML('beforeend', html);
+  }
 });
 
-// Init
-loadProducts();
-noCamMsg.classList.remove('hidden');
+// Seed example JSON for U200 (cùng giá cho 2 màu)
+window.addEventListener('load',()=>{
+  const demo = [
+    { name: '3M RelyX U200 Automix Refill A2 (Xi măng gắn U200)', price: 0, alias: ['RelyX U200 A2','U-200 A2','Xi mang U200 A2'], variants:['A2','A3'] },
+    { name: '3M RelyX U200 Automix Refill A3 (Xi măng gắn U200)', price: 0, alias: ['RelyX U200 A3','U-200 A3','Xi mang U200 A3'], variants:['A2','A3'] }
+  ];
+  $('#jsonText').value = JSON.stringify(demo, null, 2);
+});
 </script>
 </body>
 </html>
