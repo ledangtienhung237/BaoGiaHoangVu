@@ -1,22 +1,21 @@
 <!doctype html>
 <html lang="vi">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Smart Product Scanner — Nhận dạng & đối chiếu JSON</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = { theme: { extend: { boxShadow: { 'soft': '0 8px 30px rgba(0,0,0,.08)' }}}}
-  </script>
-  <!-- Fuse.js for fuzzy search -->
-  <script src="https://cdn.jsdelivr.net/npm/fuse.js@6.6.2"></script>
-  <!-- Tesseract.js for in-browser OCR (no server needed) -->
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-  <style>
-    /* Hide default file input */
-    input[type="file"] { display: none; }
-    .scroll-thin{ scrollbar-width: thin; }
-  </style>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Smart Product Scanner — Nhận dạng & đối chiếu JSON</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = { theme: { extend: { boxShadow: { 'soft': '0 8px 30px rgba(0,0,0,.08)' }}}}
+</script>
+<!-- Fuse.js for fuzzy search -->
+<script src="https://cdn.jsdelivr.net/npm/fuse.js@6.6.2"></script>
+<!-- Tesseract.js for in-browser OCR (no server needed) -->
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<style>
+input[type="file"] { display: none; }
+.scroll-thin{ scrollbar-width: thin; }
+</style>
 </head>
 <body class="bg-slate-50 text-slate-800 selection:bg-indigo-100">
   <!-- Header -->
@@ -167,7 +166,6 @@ const $ = (sel) => document.querySelector(sel);
 const fmtVND = (n) => n?.toLocaleString('vi-VN', { style: 'currency', currency: 'VND' });
 const stripAccents = (s) => s?.normalize('NFD').replace(/\p{Diacritic}/gu, '') ?? '';
 const simplify = (s) => stripAccents(String(s||'').toLowerCase()).replace(/[^\p{L}\p{N}\s\-_.]/gu,' ').replace(/\s+/g,' ').trim();
-
 // ===== Elements =====
 const video = $('#video');
 const canvas = $('#canvas');
@@ -264,25 +262,71 @@ function stopCamera(){
   btnStartCam.disabled = false; btnStopCam.disabled = true; btnCapture.disabled = true; btnRunOCR.disabled = !!lastImageBlob;
 }
 
+// ===== Camera capture chỉnh lại chất lượng =====
 function captureFrame(){
-  const vw = video.videoWidth || 1280;
-  const vh = video.videoHeight || 720;
-  // Downscale to speed up OCR but keep detail
-  const maxW = 1280; const scale = Math.min(1, maxW/vw);
-  const cw = Math.round(vw*scale), ch = Math.round(vh*scale);
-  canvas.width = cw; canvas.height = ch;
-  ctx.drawImage(video, 0, 0, cw, ch);
-  canvas.toBlob((blob)=>{ lastImageBlob = blob; btnRunOCR.disabled = !blob; if(autoMatch.checked) runOCRAndMaybeMatch(); }, 'image/jpeg', 0.92);
+const vw = video.videoWidth || 1280;
+const vh = video.videoHeight || 720;
+const maxW = 1920; const scale = Math.min(1, maxW/vw);
+const cw = Math.round(vw*scale), ch = Math.round(vh*scale);
+canvas.width = cw; canvas.height = ch;
+ctx.drawImage(video, 0, 0, cw, ch);
+canvas.toBlob((blob)=>{ lastImageBlob = blob; btnRunOCR.disabled = !blob; if(autoMatch.checked) runOCRAndMaybeMatch(); }, 'image/jpeg', 0.95);
 }
+
 
 function drawSelectedImage(img){
-  const maxW = 1600; const scale = Math.min(1, maxW/img.naturalWidth);
-  const cw = Math.round(img.naturalWidth*scale), ch = Math.round(img.naturalHeight*scale);
-  canvas.width = cw; canvas.height = ch;
-  ctx.drawImage(img, 0, 0, cw, ch);
-  canvas.toBlob((blob)=>{ lastImageBlob = blob; btnRunOCR.disabled = !blob; if(autoMatch.checked) runOCRAndMaybeMatch(); }, 'image/jpeg', 0.95);
+const maxW = 2048; const scale = Math.min(1, maxW/img.naturalWidth);
+const cw = Math.round(img.naturalWidth*scale), ch = Math.round(img.naturalHeight*scale);
+canvas.width = cw; canvas.height = ch;
+ctx.drawImage(img, 0, 0, cw, ch);
+canvas.toBlob((blob)=>{ lastImageBlob = blob; btnRunOCR.disabled = !blob; if(autoMatch.checked) runOCRAndMaybeMatch(); }, 'image/jpeg', 0.96);
 }
 
+  // ===== OCR có tiền xử lý ảnh =====
+function preprocessCanvas(){
+const w = canvas.width, h = canvas.height;
+const off = document.createElement('canvas');
+off.width = w; off.height = h;
+const octx = off.getContext('2d');
+octx.drawImage(canvas, 0, 0, w, h);
+const img = octx.getImageData(0,0,w,h);
+const d = img.data;
+const contrast = 60;
+const f = (259*(contrast+255))/(255*(259-contrast));
+for(let i=0;i<d.length;i+=4){
+let g = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
+g = f*(g-128)+128; if(g<0) g=0; if(g>255) g=255;
+const thr = 160; const v = g>thr?255:0;
+d[i]=d[i+1]=d[i+2]=v; d[i+3]=255;
+}
+octx.putImageData(img,0,0);
+return new Promise(resolve=> off.toBlob(resolve,'image/png',1));
+}
+
+
+async function detectText(blob){
+if(!blob){ throw new Error('Chưa có ảnh để OCR'); }
+ocrBox.classList.remove('hidden');
+ocrPct.textContent = '0%'; ocrBar.style.width = '0%';
+
+
+const preBlob = await preprocessCanvas();
+const { data } = await Tesseract.recognize(preBlob, 'eng+vie', {
+tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_/.:',
+preserve_interword_spaces: '1',
+user_defined_dpi: '300',
+psm: 6,
+logger: (m)=>{
+if(m.status === 'recognizing text' && m.progress!=null){
+const pct = Math.round(m.progress*100);
+ocrPct.textContent = pct+'%';
+ocrBar.style.width = pct+'%';
+}
+}
+});
+ocrBox.classList.add('hidden');
+return (data?.text||'').trim();
+}
 function clearCanvas(){
   ctx.clearRect(0,0,canvas.width, canvas.height);
   lastImageBlob = null; ocrText.value = '';
@@ -327,42 +371,38 @@ async function runOCRAndMaybeMatch(){
   }catch(err){ alert('OCR lỗi: '+ err.message); }
 }
 
-// ===== Matching =====
+// ===== Matching cải tiến regex phát hiện mã =====
 function doMatch(){
-  const qraw = ocrText.value || '';
-  const q = simplify(qraw);
-  if(!q){ alert('Chưa có chuỗi để đối chiếu'); return; }
-  if(!fuse){ alert('Chưa tải xong products.json'); return; }
+const qraw = ocrText.value || '';
+const q = simplify(qraw);
+if(!q){ alert('Chưa có chuỗi để đối chiếu'); return; }
+if(!fuse){ alert('Chưa tải xong products.json'); return; }
 
-  // Try multiple strategies
-  const tokens = q.split(/\s+/).filter(Boolean);
-  const strongHints = tokens.filter(t=>/[A-Za-z]*\d+[A-Za-z\d-]*/.test(t)); // mã kiểu 4868A2, D-LL-3, 804-152, etc.
-  let results = [];
 
-  // 1) Direct search with full simplified string
-  results = fuse.search(q);
+const tokens = q.split(/\s+/).filter(Boolean);
+const codeRegexes = [/[A-Z]{1,4}[-\/]?\d{2,6}[A-Z\d-]*/i, /\b\d{3,6}[A-Z]\d?\b/];
+const strongHints = tokens.filter(t=> codeRegexes.some(rx=> rx.test(t)));
+let results = fuse.search(q);
 
-  // 2) Boost products that contain all strong hints
-  const boosted = products.map(p=>{
-    const pn = simplify(p.name);
-    const hit = strongHints.length ? strongHints.every(h=> pn.includes(h.toLowerCase())) : false;
-    return { p, boost: hit ? 0.12 : 0 };
-  });
 
-  // Merge boost into fuse result scores (lower is better)
-  const merged = results.map(r=>{
-    const b = boosted.find(x=>x.p===r.item)?.boost || 0;
-    return { item: r.item, score: Math.max(0, (r.score ?? 0) - b) };
-  }).sort((a,b)=>a.score-b.score);
+const boosted = products.map(p=>{
+const pn = simplify(p.name);
+const hit = strongHints.length ? strongHints.every(h=> pn.includes(h.toLowerCase())) : false;
+return { p, boost: hit ? 0.12 : 0 };
+});
 
-  const top = merged[0];
-  if(!top){ showNoMatch('Không có kết quả.'); return; }
 
-  // Heuristic threshold: <=0.34 chắc chắn; 0.34–0.5 tạm ổn; >0.5 nghi ngờ
-  const score = Number(top.score ?? 1);
-  if(score > 0.5){ showNoMatch('Độ tin cậy thấp (score '+score.toFixed(2)+').'); addLog(qraw, null, score); return; }
+const merged = results.map(r=>{
+const b = boosted.find(x=>x.p===r.item)?.boost || 0;
+return { item: r.item, score: Math.max(0, (r.score ?? 0) - b) };
+}).sort((a,b)=>a.score-b.score);
 
-  showMatch(top.item, score, qraw);
+
+const top = merged[0];
+if(!top){ showNoMatch('Không có kết quả.'); return; }
+const score = Number(top.score ?? 1);
+if(score > 0.5){ showNoMatch('Độ tin cậy thấp (score '+score.toFixed(2)+').'); addLog(qraw, null, score); return; }
+showMatch(top.item, score, qraw);
 }
 
 function showMatch(item, score, qraw){
